@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "name": "PerFlux",
+  "identifier": "perflux",
+  "author": "OpenAI",
+  "github": "https://github.com/your-user/perflux",
+  "homepage": "https://github.com/your-user/perflux",
+  "description": "Lumiverse Spindle extension that adds a PerFlux image generation tab backed by Pollinations.",
+  "permissions": [],
+  "requested_capabilities": ["dynamic_code_execution", "base64_decode"],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js",
+  "minimum_lumiverse_version": "0.1.0"
+}
