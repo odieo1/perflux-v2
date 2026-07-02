@@ -2,8 +2,11 @@ import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 
 type BackendMessage =
   | { type: 'perflux:status'; status: 'loading'; count: number }
+  | { type: 'perflux:progress'; completed: number; count: number }
   | { type: 'perflux:results'; images: Array<{ index: number; seed: number; prompt: string; mimeType: string; dataUrl: string }> }
   | { type: 'perflux:error'; message: string }
+  | { type: 'perflux:key-saved' }
+  | { type: 'perflux:key-status'; hasKey: boolean }
 
 const STYLE_OPTIONS = ['Photo-realistic', 'vintage', '3d', 'cartoon'] as const
 
@@ -17,6 +20,7 @@ export function setup(ctx: SpindleFrontendContext) {
     .perflux-row{display:grid;grid-template-columns:1fr 160px 120px 140px;gap:12px;align-items:end}
     .perflux-field{display:grid;gap:6px}
     .perflux-label{font-size:12px;color:var(--lumiverse-text-muted)}
+    .perflux-key-hint{font-size:11px;color:var(--lumiverse-text-dim)}
     .perflux-textarea,.perflux-input,.perflux-select{width:100%;background:var(--lumiverse-fill);color:var(--lumiverse-text,inherit);border:1px solid var(--lumiverse-border);border-radius:var(--lumiverse-radius);padding:10px 12px}
     .perflux-textarea{min-height:150px;resize:vertical}
     .perflux-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
@@ -79,9 +83,10 @@ export function setup(ctx: SpindleFrontendContext) {
           </div>
           <div class="perflux-field">
             <label class="perflux-label" for="perflux-key">API key</label>
-            <input id="perflux-key" class="perflux-input" type="password" placeholder="Optional session key" />
+            <input id="perflux-key" class="perflux-input" type="password" placeholder="Paste to save" />
           </div>
         </div>
+        <div id="perflux-key-hint" class="perflux-key-hint">Checking saved key…</div>
         <div class="perflux-actions">
           <button id="perflux-generate" class="perflux-btn" type="button">Generate</button>
           <div id="perflux-status" class="perflux-status"></div>
@@ -102,6 +107,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const styleEl = shell.querySelector('#perflux-style') as HTMLSelectElement | null
   const countEl = shell.querySelector('#perflux-count') as HTMLSelectElement | null
   const keyEl = shell.querySelector('#perflux-key') as HTMLInputElement | null
+  const keyHintEl = shell.querySelector('#perflux-key-hint') as HTMLDivElement | null
   const buttonEl = shell.querySelector('#perflux-generate') as HTMLButtonElement | null
   const statusEl = shell.querySelector('#perflux-status') as HTMLDivElement | null
   const galleryEl = shell.querySelector('#perflux-gallery') as HTMLDivElement | null
@@ -111,6 +117,13 @@ export function setup(ctx: SpindleFrontendContext) {
 
   function setStatus(message: string) {
     if (statusEl) statusEl.textContent = message
+  }
+
+  function setKeyHint(hasKey: boolean) {
+    if (!keyHintEl) return
+    keyHintEl.textContent = hasKey
+      ? 'A key is already saved. Leave this blank unless you want to replace it.'
+      : 'No key saved yet — paste your Pollinations API key and generate once to save it.'
   }
 
   function clearGallery() {
@@ -176,21 +189,39 @@ export function setup(ctx: SpindleFrontendContext) {
 
   const offMessage = ctx.onBackendMessage((message: BackendMessage) => {
     if (!message || typeof message !== 'object') return
+
     if (message.type === 'perflux:status') {
       setStatus(`Generating ${message.count} image${message.count === 1 ? '' : 's'}...`)
       tab.setBadge('…')
       renderSkeletons(message.count)
       return
     }
+    if (message.type === 'perflux:progress') {
+      setStatus(`Generated ${message.completed} of ${message.count}...`)
+      return
+    }
     if (message.type === 'perflux:results') {
       setStatus(`Generated ${message.images.length} image${message.images.length === 1 ? '' : 's'}.`)
       renderImages(message.images)
+      // A key only reaches the backend once a generate call succeeds, so
+      // this is a reliable point to refresh the "already saved" hint.
+      if (keyEl) keyEl.value = ''
+      ctx.sendToBackend({ type: 'perflux:check-key' })
       return
     }
     if (message.type === 'perflux:error') {
       setStatus(message.message)
       tab.setBadge(null)
       clearGallery()
+      return
+    }
+    if (message.type === 'perflux:key-status') {
+      setKeyHint(message.hasKey)
+      return
+    }
+    if (message.type === 'perflux:key-saved') {
+      setKeyHint(true)
+      if (keyEl) keyEl.value = ''
     }
   })
 
@@ -234,6 +265,9 @@ export function setup(ctx: SpindleFrontendContext) {
   const offActivate = tab.onActivate(() => {
     tab.setBadge(null)
   })
+
+  // Check once on load so the hint text is accurate before the user does anything.
+  ctx.sendToBackend({ type: 'perflux:check-key' })
 
   return () => {
     offActivate()
