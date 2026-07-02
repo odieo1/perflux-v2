@@ -10,5 +10,6 @@
   "requested_capabilities": ["dynamic_code_execution", "base64_decode"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js",
+  "authorization": "Bearer POLLINATIONS_API_KEY"
   "minimum_lumiverse_version": "0.1.0"
 }
