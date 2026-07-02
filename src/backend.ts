@@ -79,7 +79,10 @@ spindle.onFrontendMessage(async (raw: FrontendEnvelope, meta: any) => {
     const count = Math.max(1, Math.min(6, Number(raw.request.count || 1)))
     const jobs = Array.from({ length: count }, (_, index) => generateOne({ ...raw.request, count }, index, meta?.userId))
     spindle.sendToFrontend({ type: 'perflux:status', status: 'loading', count }, meta?.userId)
-    const images = await Promise.all(jobs)
+      if (index < count - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+      }
+  }
     spindle.sendToFrontend({ type: 'perflux:results', images }, meta?.userId)
   } catch (error: any) {
     spindle.sendToFrontend({
