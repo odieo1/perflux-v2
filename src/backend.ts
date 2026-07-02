@@ -72,19 +72,39 @@ async function generateOne(request: GenerateRequest, index: number, userId?: str
   }
 }
 
-spindle.onFrontendMessage(async (raw: FrontendEnvelope, meta: any) => {
+spindle.onFrontendMessage(async (raw: FrontendEnvelope, userId: string) => {
   if (!raw || raw.type !== 'perflux:generate') return
 
   try {
     const count = Math.max(1, Math.min(6, Number(raw.request.count || 1)))
-    const jobs = Array.from({ length: count }, (_, index) => generateOne({ ...raw.request, count }, index, meta?.userId))
-    spindle.sendToFrontend({ type: 'perflux:status', status: 'loading', count }, meta?.userId)
-    const images = await Promise.all(jobs)
-    spindle.sendToFrontend({ type: 'perflux:results', images }, meta?.userId)
+
+    spindle.sendToFrontend(
+      { type: 'perflux:status', status: 'loading', count },
+      userId
+    )
+
+    const images = []
+
+    for (let index = 0; index < count; index++) {
+      if (index > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+
+      const image = await generateOne({ ...raw.request, count }, index, userId)
+      images.push(image)
+    }
+
+    spindle.sendToFrontend(
+      { type: 'perflux:results', images },
+      userId
+    )
   } catch (error: any) {
-    spindle.sendToFrontend({
-      type: 'perflux:error',
-      message: error?.message || 'Image generation failed.'
-    }, meta?.userId)
+    spindle.sendToFrontend(
+      {
+        type: 'perflux:error',
+        message: error?.message || 'Image generation failed.'
+      },
+      userId
+    )
   }
 })
