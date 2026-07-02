@@ -20,23 +20,46 @@ const STYLE_TAGS: Record<GenerateRequest['style'], string> = {
   cartoon: 'cartoon style, illustrated, bold outlines'
 }
 
-async function getSavedApiKey(userId?: string) {
-  // If no user is logged in, do not call spindle.enclave to avoid the crash
-  if (!userId) {
-    return Bun.env.POLLINATIONS_API 
-      ?? Bun.env.POLINATIONS_API 
-      ?? null;
-  }
-
-  // If userId exists, safely query the enclave, then fallback to environment variables
-  return (await spindle.enclave.get('POLLINATIONS_API', userId))
-    ?? (await spindle.enclave.get('POLINATIONS_API', userId))
-    ?? Bun.env.POLLINATIONS_API
-    ?? Bun.env.POLINATIONS_API
+// 1. A clean, independent function that ONLY checks Hugging Face / Environment variables
+function getGlobalApiKey(): string | null {
+  return Bun.env.POLLINATIONS_API 
+    ?? Bun.env.POLINATIONS_API 
     ?? null;
 }
 
+// 2. The database/enclave lookup function which now explicitly REQUIRES a string userId
+async function getUserSavedApiKey(userId: string): Promise<string | null> {
+  try {
+    return (await spindle.enclave.get('POLLINATIONS_API', userId))
+      ?? (await spindle.enclave.get('POLINATIONS_API', userId))
+      ?? null;
+  } catch (e) {
+    // Catch-all safety block to prevent Spindle-scoped framework crashes
+    console.warn("Spindle enclave read failed:", e);
+    return null;
+  }
 }
+
+// 3. Your generation entrypoint handles the logic routing safely
+async function generateOne(request: GenerateRequest, index: number, userId?: string) {
+  
+  // Rule 1: Use explicit request key if provided
+  let resolvedKey = request.apiKey?.trim();
+
+  // Rule 2: If no key, look up via user session (if logged in) or the global system secret
+  if (!resolvedKey) {
+    resolvedKey = userId 
+      ? (await getUserSavedApiKey(userId)) ?? getGlobalApiKey()
+      : getGlobalApiKey();
+  }
+
+  if (!resolvedKey) {
+    throw new Error('No Pollinations API key available. Save POLLINATIONS_API or POLINATIONS_API in Lumiverse secrets, or enter a key in the PerFlux UI.');
+  }
+
+  // Your generation code continues...
+}
+
 
 
   const finalPrompt = `${request.prompt.trim()}, ${STYLE_TAGS[request.style]}`
