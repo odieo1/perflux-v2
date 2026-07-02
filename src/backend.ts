@@ -20,25 +20,62 @@ const STYLE_TAGS: Record<GenerateRequest['style'], string> = {
   cartoon: 'cartoon style, illustrated, bold outlines'
 }
 
-// 1. A clean, independent function that ONLY checks Hugging Face / Environment variables
-function getGlobalApiKey(): string | null {
-  return Bun.env.POLLINATIONS_API 
-    ?? Bun.env.POLINATIONS_API 
-    ?? null;
+// backend.ts
+import { OpenAI } from 'openai'; // Pollinations is fully OpenAI-compatible
+
+// 1. Fetch the secret Pollinations API key securely from Hugging Face environment variables
+const pollinationsKey = process.env.POLLINATIONS_API_KEY;
+
+if (!pollinationsKey) {
+  throw new Error("POLLINATIONS_API_KEY is not defined in Hugging Face Repository Secrets.");
 }
 
-// 2. The database/enclave lookup function which now explicitly REQUIRES a string userId
-async function getUserSavedApiKey(userId: string): Promise<string | null> {
+// 2. Initialize the OpenAI client pointing to the Pollinations Base URL
+// Pollinations secret keys start with 'sk_*' for backend use
+const pollinationsClient = new OpenAI({
+  baseURL: 'https://gen.pollinations.ai/v1', 
+  apiKey: pollinationsKey,
+});
+
+/**
+ * Generates text response using Pollinations AI (Lumiverse Spindle Backend)
+ */
+export async function generateText(prompt: string, model: string = 'openai') {
   try {
-    return (await spindle.enclave.get('POLLINATIONS_API', userId))
-      ?? (await spindle.enclave.get('POLINATIONS_API', userId))
-      ?? null;
-  } catch (e) {
-    // Catch-all safety block to prevent Spindle-scoped framework crashes
-    console.warn("Spindle enclave read failed:", e);
-    return null;
+    const response = await pollinationsClient.chat.completions.create({
+      model: model, // e.g., 'openai', 'mistral', 'qwen'
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return response.choices[0].message.content;
+  } catch (error) {
+    console.error("Pollinations Text API Error:", error);
+    throw error;
   }
 }
+
+/**
+ * Generates images for Lumiverse scene/chat backgrounds via Pollinations
+ */
+export async function generateSceneImage(prompt: string, model: string = 'flux') {
+  try {
+    // Pollinations image generation via GET or POST
+    const response = await fetch(`https://pollinations.ai{encodeURIComponent(prompt)}?model=${model}`, {
+      headers: {
+        'Authorization': `Bearer ${pollinationsKey}`
+      }
+    });
+
+    if (!response.ok) throw new Error(`Image fetch failed: ${response.statusText}`);
+    
+    // Returns the raw image buffer or image URL depending on Lumiverse requirements
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (error) {
+    console.error("Pollinations Image API Error:", error);
+    throw error;
+  }
+}
+
 
 // 3. Your generation entrypoint handles the logic routing safely
 async function generateOne(request: GenerateRequest, index: number, userId?: string) {
