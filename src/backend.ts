@@ -23,6 +23,8 @@ const STYLE_TAGS: Record<GenerateRequest['style'], string> = {
 async function getSavedApiKey(userId?: string) {
   return (await spindle.enclave.get('POLLINATIONS_API', userId))
     ?? (await spindle.enclave.get('POLINATIONS_API', userId))
+    ?? Bun.env.POLLINATIONS_API
+    ?? Bun.env.POLINATIONS_API
     ?? null
 }
 
@@ -31,6 +33,10 @@ async function generateOne(request: GenerateRequest, index: number, userId?: str
   if (!resolvedKey) {
     throw new Error('No Pollinations API key available. Save POLLINATIONS_API or POLINATIONS_API in Lumiverse secrets, or enter a key in the PerFlux UI.')
   }
+  
+  // Continue generation logic...
+}
+
 
   const finalPrompt = `${request.prompt.trim()}, ${STYLE_TAGS[request.style]}`
   const seed = Number.isFinite(request.seed as number)
