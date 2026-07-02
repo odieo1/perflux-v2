@@ -79,10 +79,31 @@ spindle.onFrontendMessage(async (raw: FrontendEnvelope, meta: any) => {
     const count = Math.max(1, Math.min(6, Number(raw.request.count || 1)))
     const jobs = Array.from({ length: count }, (_, index) => generateOne({ ...raw.request, count }, index, meta?.userId))
     spindle.sendToFrontend({ type: 'perflux:status', status: 'loading', count }, meta?.userId)
-      if (index < count - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1500))
-      }
+      // A smart delay function that handles dynamic backoff
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function generateImageWithRetry(promptData, retries = 5, delay = 2000) {
+  try {
+    // Replace this with your actual API generation call
+    return await api.generateImage(promptData); 
+  } catch (error) {
+    // Check if the error is a 429 Rate Limit
+    if (error.status === 429 && retries > 0) {
+      // Add randomness (jitter) so requests don't bunch up
+      const jitter = Math.random() * 1000;
+      const backoffDelay = delay + jitter;
+      
+      console.warn(`Rate limited. Retrying in ${(backoffDelay / 1000).toFixed(2)}s...`);
+      await sleep(backoffDelay);
+      
+      // Retry with double the base delay time
+      return generateImageWithRetry(promptData, retries - 1, delay * 2);
+    }
+    // Throw error if it's not a 429 or we ran out of retries
+    throw error; 
   }
+}
+    
     spindle.sendToFrontend({ type: 'perflux:results', images }, meta?.userId)
   } catch (error: any) {
     spindle.sendToFrontend({
