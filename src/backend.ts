@@ -20,30 +20,29 @@ const STYLE_TAGS: Record<GenerateRequest['style'], string> = {
   'cartoon': 'cartoon style, illustrated, bold outlines'
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-    });
+const ENCLAVE_KEY = 'pollinations_api_key'
 
-    if (!response.ok) throw new Error(`Image fetch failed: ${response.statusText}`);
-    
-    // Returns the raw image buffer or image URL depending on Lumiverse requirements
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
-  } catch (error) {
-    console.error("Pollinations Image API Error:", error);
-    throw error;
+// Reads the key from the Secure Enclave (per-user encrypted store). Falls back
+// to persisting a key sent from the frontend settings field, if provided, so
+// the first save also works without a separate round trip.
+async function resolveApiKey(request: GenerateRequest, userId: string): Promise<string> {
+  if (request.apiKey) {
+    await spindle.enclave.put(ENCLAVE_KEY, request.apiKey, userId)
+    return request.apiKey
   }
+  const stored = await spindle.enclave.get(ENCLAVE_KEY, userId)
+  if (stored) return stored
+  throw new Error('No Pollinations API key saved yet. Add one in PerFlux settings.')
 }
-//GET API FROM SECRETS AND VARIABLES IN HUGGINGFACE HUB
-import os
-from huggingface_hub import InferenceClient
 
-# Import the secret from your Hugging Face Environment
-api_key = os.getenv("POLLINATIONS_API_KEY")
-
-# Use the secret in your application
-client = InferenceClient(api_key=api_key)
-//CONTINUE GENERATION
-
+async function generateOne(
+  request: GenerateRequest,
+  index: number,
+  userId: string,
+  resolvedKey: string
+) {
   const finalPrompt = `${request.prompt.trim()}, ${STYLE_TAGS[request.style]}`
   const seed = Number.isFinite(request.seed as number)
     ? Number(request.seed)
@@ -67,60 +66,92 @@ client = InferenceClient(api_key=api_key)
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
-    throw new Error(`Pollinations request failed (${response.status}): ${detail || response.statusText}`)
+    const err: any = new Error(`Pollinations request failed (${response.status}): ${detail || response.statusText}`)
+    err.status = response.status
+    throw err
   }
 
   const bytes = new Uint8Array(await response.arrayBuffer())
   let binary = ''
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
   const base64 = btoa(binary)
+  const mimeType = response.headers.get('content-type') || 'image/jpeg'
 
   return {
     index,
     seed,
     prompt: finalPrompt,
-    mimeType: response.headers.get('content-type') || 'image/jpeg',
-    dataUrl: `data:${response.headers.get('content-type') || 'image/jpeg'};base64,${base64}`
+    mimeType,
+    dataUrl: `data:${mimeType};base64,${base64}`
   }
 }
 
-spindle.onFrontendMessage(async (raw: FrontendEnvelope, meta: any) => {
-  if (!raw || raw.type !== 'perflux:generate') return
+async function generateOneWithRetry(
+  request: GenerateRequest,
+  index: number,
+  userId: string,
+  resolvedKey: string,
+  retries = 4,
+  baseDelay = 2000
+): Promise<ReturnType<typeof generateOne>> {
+  try {
+    return await generateOne(request, index, userId, resolvedKey)
+  } catch (error: any) {
+    if (error?.status === 429 && retries > 0) {
+      const jitter = Math.random() * 1000
+      const delay = baseDelay + jitter
+      spindle.log?.warn?.(`Rate limited on image ${index}, retrying in ${(delay / 1000).toFixed(1)}s`)
+      await sleep(delay)
+      return generateOneWithRetry(request, index, userId, resolvedKey, retries - 1, baseDelay * 2)
+    }
+    throw error
+  }
+}
+
+type SaveKeyEnvelope = { type: 'perflux:save-key'; apiKey: string }
+type CheckKeyEnvelope = { type: 'perflux:check-key' }
+
+// Signature confirmed from Lumiverse's own examples: (payload, userId) — userId
+// is the second argument directly, NOT a `.userId` property on it.
+spindle.onFrontendMessage(async (raw: FrontendEnvelope | SaveKeyEnvelope | CheckKeyEnvelope, userId: string) => {
+  if (!raw) return
+
+  if (raw.type === 'perflux:save-key') {
+    await spindle.enclave.put(ENCLAVE_KEY, raw.apiKey, userId)
+    spindle.sendToFrontend({ type: 'perflux:key-saved' }, userId)
+    return
+  }
+
+  if (raw.type === 'perflux:check-key') {
+    const hasKey = await spindle.enclave.has(ENCLAVE_KEY, userId)
+    spindle.sendToFrontend({ type: 'perflux:key-status', hasKey }, userId)
+    return
+  }
+
+  if (raw.type !== 'perflux:generate') return
 
   try {
     const count = Math.max(1, Math.min(6, Number(raw.request.count || 1)))
-    const jobs = Array.from({ length: count }, (_, index) => generateOne({ ...raw.request, count }, index, meta?.userId))
-    spindle.sendToFrontend({ type: 'perflux:status', status: 'loading', count }, meta?.userId)
-      // A smart delay function that handles dynamic backoff
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const resolvedKey = await resolveApiKey(raw.request, userId)
 
-async function generateImageWithRetry(promptData, retries = 5, delay = 2000) {
-  try {
-    // Replace this with your actual API generation call
-    return await api.generateImage(promptData); 
-  } catch (error) {
-    // Check if the error is a 429 Rate Limit
-    if (error.status === 429 && retries > 0) {
-      // Add randomness (jitter) so requests don't bunch up
-      const jitter = Math.random() * 1000;
-      const backoffDelay = delay + jitter;
-      
-      console.warn(`Rate limited. Retrying in ${(backoffDelay / 1000).toFixed(2)}s...`);
-      await sleep(backoffDelay);
-      
-      // Retry with double the base delay time
-      return generateImageWithRetry(promptData, retries - 1, delay * 2);
+    spindle.sendToFrontend({ type: 'perflux:status', status: 'loading', count }, userId)
+
+    // Sequential, not parallel — this is what was tripping Pollinations' quota.
+    // A small gap between calls on top of the retry/backoff gives extra headroom.
+    const images = []
+    for (let index = 0; index < count; index++) {
+      const image = await generateOneWithRetry(raw.request, index, userId, resolvedKey)
+      images.push(image)
+      spindle.sendToFrontend({ type: 'perflux:progress', completed: index + 1, count }, userId)
+      if (index < count - 1) await sleep(500)
     }
-    // Throw error if it's not a 429 or we ran out of retries
-    throw error; 
-  }
-}
-    
-    spindle.sendToFrontend({ type: 'perflux:results', images }, meta?.userId)
+
+    spindle.sendToFrontend({ type: 'perflux:results', images }, userId)
   } catch (error: any) {
     spindle.sendToFrontend({
       type: 'perflux:error',
       message: error?.message || 'Image generation failed.'
-    }, meta?.userId)
+    }, userId)
   }
 })
+
