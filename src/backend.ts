@@ -15,54 +15,12 @@ type FrontendEnvelope = {
 
 const STYLE_TAGS: Record<GenerateRequest['style'], string> = {
   'Photo-realistic': 'photorealistic, ultra-detailed, realistic lighting',
-  vintage: 'vintage style, retro tones, nostalgic aesthetic',
+  'vintage': 'vintage style, retro tones, nostalgic aesthetic',
   '3d': '3d render, volumetric lighting, highly detailed',
-  cartoon: 'cartoon style, illustrated, bold outlines'
+  'cartoon': 'cartoon style, illustrated, bold outlines'
 }
 
-// backend.ts
-import { OpenAI } from 'openai'; // Pollinations is fully OpenAI-compatible
 
-// 1. Fetch the secret Pollinations API key securely from Hugging Face environment variables
-const pollinationsKey = process.env.POLLINATIONS_API_KEY;
-
-if (!pollinationsKey) {
-  throw new Error("POLLINATIONS_API_KEY is not defined in Hugging Face Repository Secrets.");
-}
-
-// 2. Initialize the OpenAI client pointing to the Pollinations Base URL
-// Pollinations secret keys start with 'sk_*' for backend use
-const pollinationsClient = new OpenAI({
-  baseURL: 'https://gen.pollinations.ai/v1', 
-  apiKey: pollinationsKey,
-});
-
-/**
- * Generates text response using Pollinations AI (Lumiverse Spindle Backend)
- */
-export async function generateText(prompt: string, model: string = 'openai') {
-  try {
-    const response = await pollinationsClient.chat.completions.create({
-      model: model, // e.g., 'openai', 'mistral', 'qwen'
-      messages: [{ role: 'user', content: prompt }],
-    });
-    return response.choices[0].message.content;
-  } catch (error) {
-    console.error("Pollinations Text API Error:", error);
-    throw error;
-  }
-}
-
-/**
- * Generates images for Lumiverse scene/chat backgrounds via Pollinations
- */
-export async function generateSceneImage(prompt: string, model: string = 'flux') {
-  try {
-    // Pollinations image generation via GET or POST
-    const response = await fetch(`https://pollinations.ai{encodeURIComponent(prompt)}?model=${model}`, {
-      headers: {
-        'Authorization': `Bearer ${pollinationsKey}`
-      }
     });
 
     if (!response.ok) throw new Error(`Image fetch failed: ${response.statusText}`);
@@ -75,29 +33,16 @@ export async function generateSceneImage(prompt: string, model: string = 'flux')
     throw error;
   }
 }
+//GET API FROM SECRETS AND VARIABLES IN HUGGINGFACE HUB
+import os
+from huggingface_hub import InferenceClient
 
+# Import the secret from your Hugging Face Environment
+api_key = os.getenv("POLLINATIONS_API_KEY")
 
-// 3. Your generation entrypoint handles the logic routing safely
-async function generateOne(request: GenerateRequest, index: number, userId?: string) {
-  
-  // Rule 1: Use explicit request key if provided
-  let resolvedKey = request.apiKey?.trim();
-
-  // Rule 2: If no key, look up via user session (if logged in) or the global system secret
-  if (!resolvedKey) {
-    resolvedKey = userId 
-      ? (await getUserSavedApiKey(userId)) ?? getGlobalApiKey()
-      : getGlobalApiKey();
-  }
-
-  if (!resolvedKey) {
-    throw new Error('No Pollinations API key available. Save POLLINATIONS_API or POLINATIONS_API in Lumiverse secrets, or enter a key in the PerFlux UI.');
-  }
-
-  // Your generation code continues...
-}
-
-
+# Use the secret in your application
+client = InferenceClient(api_key=api_key)
+//CONTINUE GENERATION
 
   const finalPrompt = `${request.prompt.trim()}, ${STYLE_TAGS[request.style]}`
   const seed = Number.isFinite(request.seed as number)
